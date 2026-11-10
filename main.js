@@ -326,13 +326,14 @@ class GraphView3D extends ItemView {
 			s.layers = !s.layers;
 			save();
 			this.syncButtons();
+			this.refit();
 			this.apply();
 		});
 		this.btn3d.addEventListener("click", () => {
 			s.view3d = !s.view3d;
 			save();
 			this.syncButtons();
-			this.autoFit = !this.userMoved;
+			this.refit();
 			this.apply();
 		});
 		this.btnReset.addEventListener("click", () => this.resetView());
@@ -449,6 +450,13 @@ class GraphView3D extends ItemView {
 		this.btnLayers.classList.toggle("is-active", !!s.layers && !!s.view3d);
 		this.btnLayers.classList.toggle("is-disabled", !s.view3d);
 		this.btn3d.classList.toggle("is-active", !!s.view3d);
+	}
+
+	/** Auto-scale: drop manual zoom/pan and fit the whole graph again (used when the view mode changes). */
+	refit() {
+		this.userMoved = false;
+		this.autoFit = true;
+		this.panX = this.panY = 0;
 	}
 
 	resetView() {
@@ -604,10 +612,14 @@ class GraphView3D extends ItemView {
 		layers.createDiv({ cls: "qg3d-note", text: "Turn the tower on or off with the Layers view button." });
 		slider(layers, "Width inside a layer", "layerWidth", 0.5, 2.5, 0.05, () => {
 			this.syncCam();
-			if (!this.userMoved) this.fit();
+			this.refit();
+			this.fit();
 			redraw();
 		});
-		slider(layers, "Distance between layers", "layerGap", 0.3, 2, 0.05, () => this.apply(), true);
+		slider(layers, "Distance between layers", "layerGap", 0.3, 2, 0.05, () => {
+			this.refit();
+			this.apply();
+		}, true);
 
 		const actions = p.createDiv({ cls: "qg3d-actions" });
 		actions.createEl("button", { text: "Re-layout", cls: "qg3d-btn" }).addEventListener("click", () => {
@@ -845,11 +857,14 @@ class GraphView3D extends ItemView {
 		this.syncCam();
 		const w = this.wScale;
 		for (let i = 0; i < s.n; i++) r = Math.max(r, Math.hypot(s.px[i] * w, s.py[i] * w, s.pz[i]));
-		this.R = r;
 		let rxy = 1;
 		for (let i = 0; i < s.n; i++) rxy = Math.max(rxy, Math.hypot(s.px[i], s.py[i]));
+		// the floor discs of the tower must fit too, not just the nodes
+		for (const pl of this.planes) r = Math.max(r, Math.hypot(rxy * 1.05 * w, pl.z));
+		this.R = r;
 		this.Rxy = rxy;
-		this.fitZoom = (0.46 * Math.min(this.W, this.H)) / r;
+		// 3D has perspective (nearest points are up to 4/3 larger), so leave more margin than flat 2D
+		this.fitZoom = ((this.is3d ? 0.4 : 0.46) * Math.min(this.W, this.H)) / r;
 		this.zoom = this.fitZoom;
 	}
 
