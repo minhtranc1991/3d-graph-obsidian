@@ -32,6 +32,7 @@ const DEFAULTS = {
 	linkOpacity: 0.22,
 	activeLinkWidth: 1.8, // purple links of the active note
 	labelSize: 12,
+	fitFill: 0.97, // auto-fit target: share of the half-canvas the graph may reach
 	// spin
 	tilt: 23.5, // degrees
 	clockwise: true,
@@ -45,7 +46,6 @@ const DEFAULTS = {
 	spinSpeed: 0.35, // rad/s, clockwise seen from above (~18 s per turn)
 };
 const TAG_KEY = "@tag"; // palette marker: tag nodes use the theme green unless a graph.json group matches them
-const FILL = 0.97; // auto-fit target: share of the half-canvas the graph may reach
 const PURPLE = "#a855f7"; // active note, its neighbors and the links between them
 // Plane order, top to bottom. Unknown keys fall into "other".
 const PLANE_ORDER = ["source", "concept", "model", "strategy", "execution", "person", "framework", "case-study", "news", "tag", "other"];
@@ -523,11 +523,11 @@ class GraphView3D extends ItemView {
 			});
 		};
 		// onChange runs while dragging, or only on release when commit=true (for rebuilds)
-		const slider = (parent, label, key, min, max, step, onChange, commit = false) => {
+		const slider = (parent, label, key, min, max, step, onChange, commit = false, fmt = String) => {
 			const row = parent.createDiv({ cls: "qg3d-row qg3d-slider" });
 			const head = row.createDiv({ cls: "qg3d-rowhead" });
 			head.createSpan({ text: label });
-			const val = head.createSpan({ cls: "qg3d-val", text: String(s[key]) });
+			const val = head.createSpan({ cls: "qg3d-val", text: fmt(s[key]) });
 			const r = row.createEl("input", { type: "range" });
 			r.min = String(min);
 			r.max = String(max);
@@ -535,7 +535,7 @@ class GraphView3D extends ItemView {
 			r.value = String(s[key]);
 			r.addEventListener("input", () => {
 				s[key] = Number(r.value);
-				val.setText(String(s[key]));
+				val.setText(fmt(s[key]));
 				if (!commit) onChange();
 			});
 			r.addEventListener("change", () => {
@@ -594,6 +594,12 @@ class GraphView3D extends ItemView {
 		slider(display, "Link opacity", "linkOpacity", 0.05, 1, 0.01, redraw);
 		slider(display, "Active note link width", "activeLinkWidth", 0.5, 4, 0.1, redraw);
 		slider(display, "Label size", "labelSize", 9, 20, 1, redraw);
+		// auto-scale target: how much of the canvas the graph may fill when fitted (also used when switching 3D / Layers)
+		slider(display, "Auto-fit fill", "fitFill", 0.5, 1, 0.01, () => {
+			this.refit();
+			this.fit();
+			redraw();
+		}, false, (v) => `${Math.round(v * 100)}%`);
 
 		const spin = section("Spin");
 		toggle(spin, "Spin", "spin", redraw);
@@ -902,7 +908,7 @@ class GraphView3D extends ItemView {
 		this.panX = keep.px;
 		this.panY = keep.py;
 		const pad = 8; // room for the node discs themselves
-		const zoom = FILL * Math.min((cx - pad) / mx, (cy - pad) / my);
+		const zoom = this.plugin.settings.fitFill * Math.min((cx - pad) / mx, (cy - pad) / my);
 		this.fitZoom = zoom;
 		this.zoom = zoom;
 	}
