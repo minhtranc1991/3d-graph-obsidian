@@ -19,12 +19,14 @@ const DEFAULTS = {
 	spread: 1,
 	orphans: true,
 	spin: true,
+	tags: true,
 	spinSpeed: 0.35, // rad/s, clockwise seen from above (~18 s per turn)
 };
+const TAG_COLOR = "#f59e0b"; // tag nodes (unless a graph.json color group matches them)
 const PURPLE = "#a855f7"; // active note, its neighbors and the links between them
 const TILT = 0.41; // globe-like axis tilt (~23.5 degrees)
 // Plane order, top to bottom. Unknown keys fall into "other".
-const PLANE_ORDER = ["source", "concept", "model", "strategy", "execution", "person", "framework", "case-study", "news", "other"];
+const PLANE_ORDER = ["source", "concept", "model", "strategy", "execution", "person", "framework", "case-study", "news", "tag", "other"];
 
 /* ------------------------------------------------------------------ query */
 
@@ -241,6 +243,9 @@ class GraphView3D extends ItemView {
 		this._statusT = 0;
 		this.userMoved = false;
 		this.edgesSel = [];
+		this.tagNodes = new Map(); // "#tag" -> node
+		this.tagCount = 0;
+		this.searchEl = null;
 		this._prevN = 0;
 	}
 
@@ -264,6 +269,7 @@ class GraphView3D extends ItemView {
 		const search = bar.createEl("input", { type: "text", cls: "qg3d-search" });
 		search.placeholder = 'path:"02 - Concepts"  tag:#status/needs-review  ["layer":concept]';
 		search.value = s.filter;
+		this.searchEl = search;
 		search.addEventListener(
 			"input",
 			debounce(() => {
@@ -297,6 +303,7 @@ class GraphView3D extends ItemView {
 		};
 		mkToggle("Layers", "layers", "Stack source / concept / model / strategy / execution as floors of a tower");
 		mkToggle("Orphans", "orphans", "Show notes with no visible links");
+		mkToggle("Tags", "tags", "Show tags as nodes linked to the notes that carry them (click a tag to filter by it)");
 		mkToggle("Spin", "spin", "Turn like a globe (clockwise, tilted axis); pauses while the pointer is over the graph", false);
 		const speed = bar.createEl("input", { type: "range", cls: "qg3d-range", attr: { "aria-label": "Spin speed" } });
 		speed.min = "0.05";
@@ -412,6 +419,15 @@ class GraphView3D extends ItemView {
 				this.colorIdx[i] = k;
 				break;
 			}
+			if (x.isTag && !this.colorIdx[i]) {
+				let k = seen.get(TAG_COLOR);
+				if (k === undefined) {
+					k = this.palette.length;
+					seen.set(TAG_COLOR, k);
+					this.palette.push(TAG_COLOR);
+				}
+				this.colorIdx[i] = k;
+			}
 		});
 	}
 
@@ -516,6 +532,23 @@ class GraphView3D extends ItemView {
 			const linked = new Set();
 			for (const [a, b] of edges) (linked.add(a), linked.add(b));
 			sel = sel.filter((n) => linked.has(n.path));
+		}
+		this.tagCount = 0;
+		if (s.tags) {
+			const used = new Map();
+			for (const x of sel) {
+				for (const tg of new Set(x.tags)) {
+					let tn = this.tagNodes.get(tg);
+					if (!tn) {
+						tn = { path: tg, name: tg, fm: { type: "tag" }, tags: [tg], isTag: true };
+						this.tagNodes.set(tg, tn);
+					}
+					used.set(tg, tn);
+					edges.push([x.path, tg]);
+				}
+			}
+			sel = sel.concat([...used.values()]);
+			this.tagCount = used.size;
 		}
 		if (!force && this.sim && this.sameSelection(sel, edges)) {
 			this.nodes = sel;
@@ -943,7 +976,7 @@ class GraphView3D extends ItemView {
 			this._statusT = t0;
 			const actTxt = act >= 0 ? ` · ${this.nodes[act].name}: ${nb.size} links` : "";
 			const perf = this.wasSpinning ? ` · ${Math.round(this.fps)} fps · ${this.drawMs.toFixed(0)} ms${this.lite > 1 ? " (lite edges)" : ""}` : "";
-			this.status.setText(`${n} notes · ${this.edgeCount} links${actTxt}${sim.settled ? "" : " · laying out…"}${perf}`);
+			this.status.setText(`${n - this.tagCount} notes${this.tagCount ? ` · ${this.tagCount} tags` : ""} · ${this.edgeCount} links${actTxt}${sim.settled ? "" : " · laying out…"}${perf}`);
 		}
 	}
 
@@ -1040,6 +1073,15 @@ class GraphView3D extends ItemView {
 	}
 
 	openNode(i, newTab) {
+		const node = this.nodes[i];
+		if (node.isTag) {
+			// a tag node has no file: clicking it filters the graph by that tag
+			this.plugin.settings.filter = `tag:${node.path}`;
+			if (this.searchEl) this.searchEl.value = this.plugin.settings.filter;
+			this.plugin.saveSettings();
+			this.apply();
+			return;
+		}
 		const f = this.app.vault.getAbstractFileByPath(this.nodes[i].path);
 		if (!f) return;
 		const md = this.app.workspace.getLeavesOfType("markdown")[0];
