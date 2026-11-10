@@ -45,6 +45,7 @@ const DEFAULTS = {
 	spinSpeed: 0.35, // rad/s, clockwise seen from above (~18 s per turn)
 };
 const TAG_KEY = "@tag"; // palette marker: tag nodes use the theme green unless a graph.json group matches them
+const FILL = 0.97; // auto-fit target: share of the half-canvas the graph may reach
 const PURPLE = "#a855f7"; // active note, its neighbors and the links between them
 // Plane order, top to bottom. Unknown keys fall into "other".
 const PLANE_ORDER = ["source", "concept", "model", "strategy", "execution", "person", "framework", "case-study", "news", "tag", "other"];
@@ -499,6 +500,7 @@ class GraphView3D extends ItemView {
 		p.empty();
 		const save = () => this.plugin.saveSettings();
 		const redraw = () => {
+			if (this.autoFit) this.fit(); // tilt / spin change the extent
 			this.dirty = true;
 			this.kick();
 		};
@@ -846,6 +848,7 @@ class GraphView3D extends ItemView {
 		this.canvas.width = Math.round(this.W * dpr);
 		this.canvas.height = Math.round(this.H * dpr);
 		this.dpr = dpr;
+		if (this.autoFit && this.sim) this.fit();
 		this.dirty = true;
 		this.kick();
 	}
@@ -853,9 +856,10 @@ class GraphView3D extends ItemView {
 	fit() {
 		const s = this.sim;
 		if (!s || !s.n) return;
-		let r = 1;
 		this.syncCam();
 		const w = this.wScale;
+		// Bounding sphere: gives the perspective distance used by project().
+		let r = 1;
 		for (let i = 0; i < s.n; i++) r = Math.max(r, Math.hypot(s.px[i] * w, s.py[i] * w, s.pz[i]));
 		let rxy = 1;
 		for (let i = 0; i < s.n; i++) rxy = Math.max(rxy, Math.hypot(s.px[i], s.py[i]));
@@ -863,9 +867,44 @@ class GraphView3D extends ItemView {
 		for (const pl of this.planes) r = Math.max(r, Math.hypot(rxy * 1.05 * w, pl.z));
 		this.R = r;
 		this.Rxy = rxy;
-		// 3D has perspective (nearest points are up to 4/3 larger), so leave more margin than flat 2D
-		this.fitZoom = ((this.is3d ? 0.4 : 0.46) * Math.min(this.W, this.H)) / r;
-		this.zoom = this.fitZoom;
+		// Exact fit: the biggest screen offset of any node or floor disc at zoom 1, over a whole
+		// turn when the graph spins (the extent changes with the angle), so the zoom never clips.
+		const keep = { spin: this.spin, px: this.panX, py: this.panY };
+		this.zoom = 1;
+		this.panX = 0;
+		this.panY = 0;
+		const turn = this.is3d && this.plugin.settings.spin;
+		const angles = turn ? 16 : 1;
+		const cx = this.W / 2;
+		const cy = this.H / 2;
+		const out = [0, 0, 0, 1];
+		let mx = 1e-6;
+		let my = 1e-6;
+		const take = () => {
+			mx = Math.max(mx, Math.abs(out[0] - cx));
+			my = Math.max(my, Math.abs(out[1] - cy));
+		};
+		for (let k = 0; k < angles; k++) {
+			if (turn) this.spin = (k / angles) * 6.2832;
+			for (let i = 0; i < s.n; i++) {
+				this.project(s.px[i], s.py[i], s.pz[i], out);
+				take();
+			}
+			for (const pl of this.planes) {
+				for (let a = 0; a < 24; a++) {
+					const ang = (a / 24) * 6.2832;
+					this.project(Math.cos(ang) * rxy * 1.05, Math.sin(ang) * rxy * 1.05, pl.z, out);
+					take();
+				}
+			}
+		}
+		this.spin = keep.spin;
+		this.panX = keep.px;
+		this.panY = keep.py;
+		const pad = 8; // room for the node discs themselves
+		const zoom = FILL * Math.min((cx - pad) / mx, (cy - pad) / my);
+		this.fitZoom = zoom;
+		this.zoom = zoom;
 	}
 
 	/** Rotation + perspective as one cached 3x3 matrix (rebuilt only when spin / yaw / pitch change). */
