@@ -1,0 +1,63 @@
+{
+  "colorGroups": [
+    {
+      "query": "[\"layer\":concept]",
+      "color": {
+        "a": 1,
+        "rgb": 162559
+      }
+    },
+    {
+      "query": "[\"layer\":model]",
+      "color": {
+        "a": 1,
+        "rgb": 16423373
+      }
+    },
+    {
+      "query": "[\"layer\":strategy]",
+      "color": {
+        "a": 1,
+        "rgb": 15308607
+      }
+    },
+    {
+      "query": "[\"layer\":execution]",
+      "color": {
+        "a": 1,
+        "rgb": 16467532
+      }
+    },
+    {
+      "query": "[\"type\":source]",
+      "color": {
+        "a": 1,
+        "rgb": 9477549
+      }
+    },
+    {
+      "query": "[\"type\":case-study]",
+      "color": {
+        "a": 1,
+        "rgb": 14737009
+      }
+    },
+    {
+      "query": "[\"type\":person]",
+      "color": {
+        "a": 1,
+        "rgb": 10845264
+      }
+    },
+    {
+      "query": "[\"type\":framework]",
+      "color": {
+        "a": 1,
+        "rgb": 5496797
+      }
+    }
+  ],
+  "showTags": true,
+  "hideUnresolved": true,
+  "showOrphans": true
+}
