@@ -56,3 +56,94 @@
 .qg3d-canvas:active {
 	cursor: grabbing;
 }
+
+.qg3d-root {
+	position: relative;
+}
+
+.qg3d-panel {
+	display: none;
+	position: absolute;
+	left: 8px;
+	top: 46px;
+	z-index: 5;
+	width: 270px;
+	max-height: calc(100% - 56px);
+	overflow-y: auto;
+	padding: 4px 10px 10px;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	box-shadow: var(--shadow-s);
+	font-size: var(--font-ui-small);
+}
+
+.qg3d-panel.is-open {
+	display: block;
+}
+
+.qg3d-panel summary {
+	cursor: pointer;
+	font-weight: var(--font-semibold);
+	padding: 6px 0;
+}
+
+.qg3d-sec {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding-bottom: 6px;
+}
+
+.qg3d-row {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.qg3d-check {
+	flex-direction: row;
+	justify-content: space-between;
+	align-items: center;
+}
+
+.qg3d-rowhead {
+	display: flex;
+	justify-content: space-between;
+	color: var(--text-muted);
+}
+
+.qg3d-val {
+	color: var(--text-faint);
+}
+
+.qg3d-row input[type="range"] {
+	width: 100%;
+}
+
+.qg3d-group {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--text-muted);
+	word-break: break-all;
+}
+
+.qg3d-swatch {
+	flex: 0 0 auto;
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
+}
+
+.qg3d-note {
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+}
+
+.qg3d-actions {
+	display: flex;
+	gap: 8px;
+	padding-top: 6px;
+	border-top: 1px solid var(--background-modifier-border);
+}

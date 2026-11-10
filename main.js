@@ -20,11 +20,30 @@ const DEFAULTS = {
 	orphans: true,
 	spin: true,
 	tags: true,
+	panelOpen: true,
+	// display
+	nodeSize: 1,
+	nodeOpacity: 1,
+	depthFade: 0.15, // how much far nodes fade (0 = none)
+	dimOthers: 0.85, // opacity of notes unrelated to the active one
+	linkThickness: 1,
+	linkOpacity: 0.22,
+	activeLinkWidth: 1.8, // purple links of the active note
+	labelSize: 12,
+	// spin
+	tilt: 23.5, // degrees
+	clockwise: true,
+	// forces
+	center: 0.02,
+	repel: 1,
+	linkForce: 1,
+	// layers
+	layerWidth: 1.3, // width inside one layer (x1.3 = +30%)
+	layerGap: 0.9, // distance between layers (x0.9 = -10%)
 	spinSpeed: 0.35, // rad/s, clockwise seen from above (~18 s per turn)
 };
 const TAG_KEY = "@tag"; // palette marker: tag nodes use the theme green unless a graph.json group matches them
 const PURPLE = "#a855f7"; // active note, its neighbors and the links between them
-const TILT = 0.41; // globe-like axis tilt (~23.5 degrees)
 // Plane order, top to bottom. Unknown keys fall into "other".
 const PLANE_ORDER = ["source", "concept", "model", "strategy", "execution", "person", "framework", "case-study", "news", "tag", "other"];
 
@@ -96,6 +115,7 @@ class Sim {
 		this.deg = deg;
 		this.L = L;
 		this.zt = zt; // Float64Array | null
+		this.p = { center: 0.02, repel: 1, link: 1 }; // live force parameters
 		this.px = new Float64Array(n);
 		this.py = new Float64Array(n);
 		this.pz = new Float64Array(n);
@@ -110,7 +130,7 @@ class Sim {
 		const a = this.alpha;
 		const cell = L * 2.2;
 		const R2 = cell * cell;
-		const k = L * L * 0.9;
+		const k = L * L * 0.9 * this.p.repel;
 		const grid = new Map();
 		const key = (ix, iy, iz) => (ix + 4096) * 67108864 + (iy + 4096) * 8192 + (iz + 4096);
 		const cx = new Int32Array(n);
@@ -165,7 +185,7 @@ class Sim {
 			// With planes, links act in x/y only: cross-layer links must not drag nodes off their plane.
 			const dz = zt ? 0 : pz[j] - pz[i];
 			const d = Math.hypot(dx, dy, dz) || 1e-6;
-			const f = ((d - L) / d) * (0.7 / Math.min(deg[i], deg[j])) * a;
+			const f = ((d - L) / d) * ((0.7 * this.p.link) / Math.min(deg[i], deg[j])) * a;
 			vx[i] += dx * f;
 			vy[i] += dy * f;
 			vz[i] += dz * f;
@@ -174,10 +194,10 @@ class Sim {
 			vz[j] -= dz * f;
 		}
 		for (let i = 0; i < n; i++) {
-			vx[i] -= px[i] * 0.02 * a;
-			vy[i] -= py[i] * 0.02 * a;
+			vx[i] -= px[i] * this.p.center * a;
+			vy[i] -= py[i] * this.p.center * a;
 			if (zt) vz[i] += (zt[i] - pz[i]) * 0.5 * a;
-			else vz[i] -= pz[i] * 0.02 * a;
+			else vz[i] -= pz[i] * this.p.center * a;
 			vx[i] *= 0.55;
 			vy[i] *= 0.55;
 			vz[i] *= 0.55;
@@ -247,6 +267,9 @@ class GraphView3D extends ItemView {
 		this.tagCount = 0;
 		this.searchEl = null;
 		this._prevN = 0;
+		this.tiltDeg = 23.5;
+		this.wScale = 1;
+		this.panel = null;
 	}
 
 	getViewType() {
@@ -265,7 +288,6 @@ class GraphView3D extends ItemView {
 		root.empty();
 		root.addClass("qg3d-root");
 		const bar = root.createDiv({ cls: "qg3d-bar" });
-
 		const search = bar.createEl("input", { type: "text", cls: "qg3d-search" });
 		search.placeholder = 'path:"02 - Concepts"  tag:#status/needs-review  ["layer":concept]';
 		search.value = s.filter;
@@ -278,79 +300,22 @@ class GraphView3D extends ItemView {
 				this.apply();
 			}, 300)
 		);
-
-		const depth = bar.createEl("select", { cls: "qg3d-select", attr: { "aria-label": "Local depth around the active note" } });
-		[["0", "Whole vault"], ["1", "Local: 1 hop"], ["2", "Local: 2 hops"], ["3", "Local: 3 hops"]].forEach(([v, t]) => depth.createEl("option", { value: v, text: t }));
-		depth.value = String(s.depth);
-		depth.addEventListener("change", () => {
-			s.depth = Number(depth.value);
+		const gear = bar.createEl("button", { text: "Settings", cls: "qg3d-btn" });
+		gear.addEventListener("click", () => {
+			s.panelOpen = !s.panelOpen;
+			this.panel.classList.toggle("is-open", s.panelOpen);
 			this.plugin.saveSettings();
-			this.rootPath = this.app.workspace.getActiveFile()?.path ?? this.rootPath;
-			this.apply();
 		});
-
-		const mkToggle = (label, prop, tip, rebuild = true) => {
-			const l = bar.createEl("label", { cls: "qg3d-toggle", attr: { "aria-label": tip } });
-			const c = l.createEl("input", { type: "checkbox" });
-			c.checked = !!s[prop];
-			l.createSpan({ text: label });
-			c.addEventListener("change", () => {
-				s[prop] = c.checked;
-				this.plugin.saveSettings();
-				if (rebuild) this.apply();
-				else (this.kick(), (this.dirty = true));
-			});
-		};
-		mkToggle("Layers", "layers", "Stack source / concept / model / strategy / execution as floors of a tower");
-		mkToggle("Orphans", "orphans", "Show notes with no visible links");
-		mkToggle("Tags", "tags", "Show tags as nodes linked to the notes that carry them (click a tag to filter by it)");
-		mkToggle("Spin", "spin", "Turn like a globe (clockwise, tilted axis); pauses while the pointer is over the graph", false);
-		const speed = bar.createEl("input", { type: "range", cls: "qg3d-range", attr: { "aria-label": "Spin speed" } });
-		speed.min = "0.05";
-		speed.max = "1";
-		speed.step = "0.05";
-		speed.value = String(s.spinSpeed);
-		speed.addEventListener("input", () => {
-			s.spinSpeed = Number(speed.value);
+		bar.createEl("button", { text: "Reset view", cls: "qg3d-btn" }).addEventListener("click", () => this.resetView());
+		this.panel = root.createDiv({ cls: "qg3d-panel" });
+		this.panel.classList.toggle("is-open", !!s.panelOpen);
+		// the globe stops turning while you adjust settings
+		this.panel.addEventListener("pointerenter", () => (this.inside = true));
+		this.panel.addEventListener("pointerleave", () => {
+			this.inside = false;
 			this.kick();
 		});
-		speed.addEventListener("change", () => this.plugin.saveSettings());
-
-		const spread = bar.createEl("input", { type: "range", cls: "qg3d-range", attr: { "aria-label": "Spread (smaller = more compact)" } });
-		spread.min = "0.4";
-		spread.max = "2.5";
-		spread.step = "0.1";
-		spread.value = String(s.spread);
-		spread.addEventListener("change", () => {
-			s.spread = Number(spread.value);
-			this.plugin.saveSettings();
-			this.pos.clear();
-			this.apply();
-		});
-
-		const reset = bar.createEl("button", { text: "Reset view", cls: "qg3d-btn" });
-		reset.addEventListener("click", () => {
-			this.yaw = 0.6;
-			this.pitch = -0.35;
-			this.panX = this.panY = 0;
-			this.userMoved = false;
-			this.autoFit = true;
-			this.dirty = true;
-			this.kick();
-		});
-		const relayout = bar.createEl("button", { text: "Re-layout", cls: "qg3d-btn" });
-		relayout.addEventListener("click", () => {
-			this.pos.clear();
-			this.apply();
-		});
-		const colors = bar.createEl("button", { text: "Reload colors", cls: "qg3d-btn" });
-		colors.addEventListener("click", async () => {
-			await this.loadColorGroups();
-			this.recolor();
-			this.dirty = true;
-			this.kick();
-		});
-
+		this.buildPanel();
 		this.status = bar.createSpan({ cls: "qg3d-status" });
 		this.canvas = root.createEl("canvas", { cls: "qg3d-canvas" });
 		this.ctx = this.canvas.getContext("2d");
@@ -382,6 +347,7 @@ class GraphView3D extends ItemView {
 
 		this.rootPath = this.activePath = this.app.workspace.getActiveFile()?.path ?? null;
 		await this.loadColorGroups();
+		this.buildPanel();
 		this.collect();
 		this.resize();
 		this.apply();
@@ -443,6 +409,164 @@ class GraphView3D extends ItemView {
 		}
 	}
 
+	resetView() {
+		this.yaw = 0.6;
+		this.pitch = -0.35;
+		this.panX = this.panY = 0;
+		this.userMoved = false;
+		this.autoFit = true;
+		this.dirty = true;
+		this.kick();
+	}
+
+	/** Live force parameters for the layout (Graph view "Forces"). */
+	forceParams() {
+		const s = this.plugin.settings;
+		return { center: s.center, repel: s.repel, link: s.linkForce };
+	}
+
+	/** Push new force values into the running layout and let it settle again. */
+	applyForces() {
+		if (!this.sim) return;
+		this.sim.p = this.forceParams();
+		this.sim.alpha = Math.max(this.sim.alpha, 0.5);
+		this.kick();
+	}
+
+	/** Copy camera-related settings (tilt, layer width) into fields the projection reads. */
+	syncCam() {
+		const s = this.plugin.settings;
+		this.tiltDeg = s.tilt;
+		this.wScale = s.layers ? s.layerWidth : 1;
+	}
+
+	/** Settings panel, laid out like the core Graph view: Filters / Groups / Display / Spin / Forces / Layers. */
+	buildPanel() {
+		const s = this.plugin.settings;
+		const p = this.panel;
+		p.empty();
+		const save = () => this.plugin.saveSettings();
+		const redraw = () => {
+			this.dirty = true;
+			this.kick();
+		};
+		const section = (title, open = true) => {
+			const d = p.createEl("details");
+			if (open) d.open = true;
+			d.createEl("summary", { text: title });
+			return d.createDiv({ cls: "qg3d-sec" });
+		};
+		const toggle = (parent, label, key, onChange) => {
+			const row = parent.createEl("label", { cls: "qg3d-row qg3d-check" });
+			row.createSpan({ text: label });
+			const c = row.createEl("input", { type: "checkbox" });
+			c.checked = !!s[key];
+			c.addEventListener("change", () => {
+				s[key] = c.checked;
+				save();
+				onChange();
+			});
+		};
+		// onChange runs while dragging, or only on release when commit=true (for rebuilds)
+		const slider = (parent, label, key, min, max, step, onChange, commit = false) => {
+			const row = parent.createDiv({ cls: "qg3d-row qg3d-slider" });
+			const head = row.createDiv({ cls: "qg3d-rowhead" });
+			head.createSpan({ text: label });
+			const val = head.createSpan({ cls: "qg3d-val", text: String(s[key]) });
+			const r = row.createEl("input", { type: "range" });
+			r.min = String(min);
+			r.max = String(max);
+			r.step = String(step);
+			r.value = String(s[key]);
+			r.addEventListener("input", () => {
+				s[key] = Number(r.value);
+				val.setText(String(s[key]));
+				if (!commit) onChange();
+			});
+			r.addEventListener("change", () => {
+				save();
+				if (commit) onChange();
+			});
+		};
+
+		const filters = section("Filters");
+		const depth = filters.createEl("select", { cls: "qg3d-select", attr: { "aria-label": "Local depth around the active note" } });
+		[["0", "Whole vault"], ["1", "Local: 1 hop"], ["2", "Local: 2 hops"], ["3", "Local: 3 hops"]].forEach(([v, tx]) => depth.createEl("option", { value: v, text: tx }));
+		depth.value = String(s.depth);
+		depth.addEventListener("change", () => {
+			s.depth = Number(depth.value);
+			save();
+			this.rootPath = this.app.workspace.getActiveFile()?.path ?? this.rootPath;
+			this.apply();
+		});
+		toggle(filters, "Tags", "tags", () => this.apply());
+		toggle(filters, "Orphans", "orphans", () => this.apply());
+
+		const groups = section("Groups");
+		if (!this.groups.length) groups.createDiv({ cls: "qg3d-note", text: "No color groups in graph.json" });
+		for (const g of this.groups) {
+			const row = groups.createDiv({ cls: "qg3d-group" });
+			const sw = row.createSpan({ cls: "qg3d-swatch" });
+			sw.style.background = g.css;
+			row.createSpan({ text: g.query || "(empty query)" });
+		}
+		groups.createDiv({ cls: "qg3d-note", text: "Read from the core Graph view (graph.json). Other notes use the theme's node color; tags are green." });
+		groups.createEl("button", { text: "Reload colors", cls: "qg3d-btn" }).addEventListener("click", async () => {
+			await this.loadColorGroups();
+			this.recolor();
+			this.buildPanel();
+			redraw();
+		});
+
+		const display = section("Display");
+		slider(display, "Node size", "nodeSize", 0.3, 3, 0.1, redraw);
+		slider(display, "Node opacity", "nodeOpacity", 0.3, 1, 0.05, redraw);
+		slider(display, "Fade with depth", "depthFade", 0, 1, 0.05, redraw);
+		slider(display, "Dim unrelated notes", "dimOthers", 0.2, 1, 0.05, redraw);
+		slider(display, "Link thickness", "linkThickness", 0.3, 3, 0.1, redraw);
+		slider(display, "Link opacity", "linkOpacity", 0.05, 1, 0.01, redraw);
+		slider(display, "Active note link width", "activeLinkWidth", 0.5, 4, 0.1, redraw);
+		slider(display, "Label size", "labelSize", 9, 20, 1, redraw);
+
+		const spin = section("Spin");
+		toggle(spin, "Spin", "spin", redraw);
+		toggle(spin, "Clockwise (seen from above)", "clockwise", redraw);
+		slider(spin, "Speed", "spinSpeed", 0.05, 1.5, 0.05, redraw);
+		slider(spin, "Axis tilt (degrees)", "tilt", 0, 45, 0.5, redraw);
+
+		const forces = section("Forces");
+		slider(forces, "Center force", "center", 0, 0.1, 0.005, () => this.applyForces());
+		slider(forces, "Repel force", "repel", 0.2, 3, 0.1, () => this.applyForces());
+		slider(forces, "Link force", "linkForce", 0.1, 2, 0.1, () => this.applyForces());
+		slider(forces, "Link distance", "spread", 0.4, 2.5, 0.1, () => {
+			this.pos.clear();
+			this.apply();
+		}, true);
+
+		const layers = section("Layers");
+		toggle(layers, "Layers (tower)", "layers", () => this.apply());
+		slider(layers, "Width inside a layer", "layerWidth", 0.5, 2.5, 0.05, () => {
+			this.syncCam();
+			if (!this.userMoved) this.fit();
+			redraw();
+		});
+		slider(layers, "Distance between layers", "layerGap", 0.3, 2, 0.05, () => this.apply(), true);
+
+		const actions = p.createDiv({ cls: "qg3d-actions" });
+		actions.createEl("button", { text: "Re-layout", cls: "qg3d-btn" }).addEventListener("click", () => {
+			this.pos.clear();
+			this.apply();
+		});
+		actions.createEl("button", { text: "Reset settings", cls: "qg3d-btn" }).addEventListener("click", () => {
+			const keep = { filter: s.filter, panelOpen: s.panelOpen, depth: s.depth };
+			Object.assign(s, DEFAULTS, keep);
+			save();
+			this.buildPanel();
+			this.pos.clear();
+			this.apply();
+		});
+	}
+
 	async onClose() {
 		this.ro?.disconnect();
 		const w = this.contentEl.win ?? window;
@@ -460,7 +584,7 @@ class GraphView3D extends ItemView {
 			this.groups = cg.map((g) => {
 				const rgb = g.color && typeof g.color.rgb === "number" ? g.color.rgb : 0x888888;
 				const al = g.color && typeof g.color.a === "number" ? g.color.a : 1;
-				return { test: compileQuery(g.query), css: `rgba(${(rgb >> 16) & 255},${(rgb >> 8) & 255},${rgb & 255},${al})` };
+				return { query: g.query, test: compileQuery(g.query), css: `rgba(${(rgb >> 16) & 255},${(rgb >> 8) & 255},${rgb & 255},${al})` };
 			});
 		} catch (e) {
 			this.groups = [];
@@ -595,13 +719,14 @@ class GraphView3D extends ItemView {
 		if (s.layers) {
 			const present = new Set(sel.map((x) => planeKey(x.fm)));
 			const keys = PLANE_ORDER.filter((k) => present.has(k));
-			const gap = L * 3.5;
+			const gap = L * 3.5 * s.layerGap;
 			this.planes = keys.map((k, r) => ({ key: k, z: (r - (keys.length - 1) / 2) * gap }));
 			const zOf = new Map(this.planes.map((p) => [p.key, p.z]));
 			zt = new Float64Array(n);
 			sel.forEach((x, i) => (zt[i] = zOf.get(planeKey(x.fm))));
 		}
 		const sim = new Sim(n, Int32Array.from(pairs), degForce, L, zt);
+		sim.p = this.forceParams();
 		const rad = L * Math.cbrt(Math.max(n, 1)) * 0.6;
 		for (let i = 0; i < n; i++) {
 			const p = this.pos.get(sel[i].path);
@@ -657,7 +782,9 @@ class GraphView3D extends ItemView {
 		const s = this.sim;
 		if (!s || !s.n) return;
 		let r = 1;
-		for (let i = 0; i < s.n; i++) r = Math.max(r, Math.hypot(s.px[i], s.py[i], s.pz[i]));
+		this.syncCam();
+		const w = this.wScale;
+		for (let i = 0; i < s.n; i++) r = Math.max(r, Math.hypot(s.px[i] * w, s.py[i] * w, s.pz[i]));
 		this.R = r;
 		let rxy = 1;
 		for (let i = 0; i < s.n; i++) rxy = Math.max(rxy, Math.hypot(s.px[i], s.py[i]));
@@ -670,8 +797,10 @@ class GraphView3D extends ItemView {
 	buildMatrix() {
 		const cs = Math.cos(this.spin);
 		const ss = Math.sin(this.spin);
-		const ct = Math.cos(TILT);
-		const st = Math.sin(TILT);
+		const tilt = (this.tiltDeg * Math.PI) / 180;
+		const ct = Math.cos(tilt);
+		const st = Math.sin(tilt);
+		const w = this.wScale; // layer width (x/y stretch)
 		const cy = Math.cos(this.yaw);
 		const sy = Math.sin(this.yaw);
 		const cp = Math.cos(this.pitch);
@@ -680,6 +809,8 @@ class GraphView3D extends ItemView {
 		// Pipeline: spin around that axis (clockwise from above), tilt the axis like a globe,
 		// then the user's camera yaw / pitch. Linear, so push the basis vectors through it.
 		const f = (x, y, z) => {
+			x *= w;
+			y *= w;
 			const xs = x * cs + y * ss;
 			const zs = -x * ss + y * cs;
 			const xt = xs * ct - z * st;
@@ -695,10 +826,12 @@ class GraphView3D extends ItemView {
 		this._ms = this.spin;
 		this._my = this.yaw;
 		this._mp = this.pitch;
+		this._mt = this.tiltDeg;
+		this._mw = this.wScale;
 	}
 
 	project(x, y, z, out) {
-		if (this._ms !== this.spin || this._my !== this.yaw || this._mp !== this.pitch) this.buildMatrix();
+		if (this._ms !== this.spin || this._my !== this.yaw || this._mp !== this.pitch || this._mt !== this.tiltDeg || this._mw !== this.wScale) this.buildMatrix();
 		const m = this._m;
 		const X = m[0] * x + m[1] * y + m[2] * z;
 		const Y = m[3] * x + m[4] * y + m[5] * z;
@@ -736,7 +869,7 @@ class GraphView3D extends ItemView {
 		this.lastT = now;
 		const s = this.plugin.settings;
 		const spinning = !!(s.spin && sim && sim.n > 0 && !this.inside && !this.dragging);
-		if (spinning) this.spin += dt * (s.spinSpeed || DEFAULTS.spinSpeed);
+		if (spinning) this.spin += dt * (s.spinSpeed || DEFAULTS.spinSpeed) * (s.clockwise ? 1 : -1);
 		if (this.wasSpinning && !spinning) this.dirty = true; // one full-quality redraw when it stops
 		this.wasSpinning = spinning;
 		// Adaptive quality while turning: thin out edges (a fixed subset, so no flicker) if drawing is slow.
@@ -797,6 +930,8 @@ class GraphView3D extends ItemView {
 		ctx.clearRect(0, 0, this.W, this.H);
 		const th = this.theme();
 		const { muted, accent, bg } = th;
+		const s = this.plugin.settings;
+		this.syncCam();
 		const n = sim.n;
 		const R = this.R;
 		const out = [0, 0, 0, 1];
@@ -806,7 +941,7 @@ class GraphView3D extends ItemView {
 			this.sx[i] = out[0];
 			this.sy[i] = out[1];
 			this.sz[i] = out[2];
-			this.sr[i] = (1.8 + Math.sqrt(this.deg[i]) * 0.9) * out[3] * nodeScale;
+			this.sr[i] = (1.8 + Math.sqrt(this.deg[i]) * 0.9) * out[3] * nodeScale * s.nodeSize;
 		}
 
 		// plane frames (floors of the tower)
@@ -840,9 +975,9 @@ class GraphView3D extends ItemView {
 		const act = this.activeIdx;
 		const nb = this.activeNb;
 		const step = this.lite;
-		ctx.lineWidth = 1;
+		ctx.lineWidth = s.linkThickness;
 		ctx.strokeStyle = th.line;
-		ctx.globalAlpha = this.edgeCount > 4000 ? 0.1 : 0.22;
+		ctx.globalAlpha = (this.edgeCount > 4000 ? 0.45 : 1) * s.linkOpacity;
 		ctx.beginPath();
 		for (let e = 0; e < E.length; e += 2) {
 			if (step > 1 && (e >> 1) % step !== 0) continue;
@@ -856,7 +991,7 @@ class GraphView3D extends ItemView {
 		if (act >= 0) {
 			// links to and from the note open in the main window: purple
 			ctx.strokeStyle = PURPLE;
-			ctx.lineWidth = 2;
+			ctx.lineWidth = s.activeLinkWidth;
 			ctx.globalAlpha = 0.95;
 			ctx.beginPath();
 			for (let e = 0; e < E.length; e += 2) {
@@ -867,7 +1002,7 @@ class GraphView3D extends ItemView {
 				ctx.lineTo(this.sx[j], this.sy[j]);
 			}
 			ctx.stroke();
-			ctx.lineWidth = 1;
+			ctx.lineWidth = Math.max(1, s.linkThickness * 1.5);
 		}
 		if (this.hover >= 0) {
 			ctx.strokeStyle = accent;
@@ -903,7 +1038,7 @@ class GraphView3D extends ItemView {
 				for (let dim = 0; dim < 2; dim++) {
 					const b = this._bk[(ci * 4 + fl) * 2 + dim];
 					if (!b.length) continue;
-					ctx.globalAlpha = (1 - (0.35 * (fl + 0.5)) / 4) * (dim ? 0.55 : 1);
+					ctx.globalAlpha = (1 - (s.depthFade * (fl + 0.5)) / 4) * (dim ? s.dimOthers : 1) * s.nodeOpacity;
 					ctx.fillStyle = ci === 0 ? th.node : pal[ci] === TAG_KEY ? th.tag : pal[ci];
 					ctx.beginPath();
 					for (let k = 0; k < b.length; k++) {
@@ -919,7 +1054,7 @@ class GraphView3D extends ItemView {
 		// active note and its neighbors on top, with purple rings
 		for (const i of lit) {
 			const fog = Math.min(1, Math.max(0, (this.sz[i] + R) / (2 * R)));
-			ctx.globalAlpha = 1 - 0.2 * fog;
+			ctx.globalAlpha = 1 - s.depthFade * fog;
 			ctx.fillStyle = !this.colorIdx[i] ? th.node : pal[this.colorIdx[i]] === TAG_KEY ? th.tag : pal[this.colorIdx[i]];
 			ctx.beginPath();
 			ctx.arc(this.sx[i], this.sy[i], Math.max(1, this.sr[i]) * (i === act ? 1.6 : 1), 0, 6.2832);
@@ -951,7 +1086,7 @@ class GraphView3D extends ItemView {
 				else if (E[e + 1] === this.hover) push(E[e], "hovernb");
 			}
 		}
-		ctx.font = "12px var(--font-interface, sans-serif)";
+		ctx.font = `${s.labelSize}px var(--font-interface, sans-serif)`;
 		ctx.textBaseline = "middle";
 		const boxes = [];
 		for (const [i, kind] of order) {
@@ -970,7 +1105,7 @@ class GraphView3D extends ItemView {
 				for (const dir of r === 0 ? [0] : [1, -1]) {
 					for (const side of [1, -1]) {
 						const tx = side === 1 ? this.sx[i] + rad : this.sx[i] - rad - w;
-						const ty = this.sy[i] + dir * r * 14;
+						const ty = this.sy[i] + dir * r * (s.labelSize + 3);
 						const b = [tx - 2, ty - 8, tx + w + 2, ty + 8];
 						if (strong || !hit(b)) {
 							x = tx;
