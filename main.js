@@ -19,10 +19,10 @@ const DEFAULTS = {
 	spread: 1,
 	orphans: true,
 	spin: true,
+	spinSpeed: 0.35, // rad/s, clockwise seen from above (~18 s per turn)
 };
 const PURPLE = "#a855f7"; // active note, its neighbors and the links between them
 const TILT = 0.41; // globe-like axis tilt (~23.5 degrees)
-const SPIN_SPEED = 0.1; // rad/s, clockwise seen from above (~1 turn per minute)
 // Plane order, top to bottom. Unknown keys fall into "other".
 const PLANE_ORDER = ["source", "concept", "model", "strategy", "execution", "person", "framework", "case-study", "news", "other"];
 
@@ -231,6 +231,17 @@ class GraphView3D extends ItemView {
 		this.inside = false; // pointer over the canvas: the globe stops turning
 		this.dragging = false;
 		this.lastT = 0;
+		this.palette = [null]; // css colors from graph.json groups; index 0 = default
+		this.colorIdx = new Uint16Array(0);
+		this.drawMs = 0;
+		this.fps = 60;
+		this.lastDrawT = 0;
+		this.lite = 1;
+		this.wasSpinning = false;
+		this._statusT = 0;
+		this.userMoved = false;
+		this.edgesSel = [];
+		this._prevN = 0;
 	}
 
 	getViewType() {
@@ -287,6 +298,16 @@ class GraphView3D extends ItemView {
 		mkToggle("Layers", "layers", "Stack source / concept / model / strategy / execution as floors of a tower");
 		mkToggle("Orphans", "orphans", "Show notes with no visible links");
 		mkToggle("Spin", "spin", "Turn like a globe (clockwise, tilted axis); pauses while the pointer is over the graph", false);
+		const speed = bar.createEl("input", { type: "range", cls: "qg3d-range", attr: { "aria-label": "Spin speed" } });
+		speed.min = "0.05";
+		speed.max = "1";
+		speed.step = "0.05";
+		speed.value = String(s.spinSpeed);
+		speed.addEventListener("input", () => {
+			s.spinSpeed = Number(speed.value);
+			this.kick();
+		});
+		speed.addEventListener("change", () => this.plugin.saveSettings());
 
 		const spread = bar.createEl("input", { type: "range", cls: "qg3d-range", attr: { "aria-label": "Spread (smaller = more compact)" } });
 		spread.min = "0.4";
@@ -305,6 +326,7 @@ class GraphView3D extends ItemView {
 			this.yaw = 0.6;
 			this.pitch = -0.35;
 			this.panX = this.panY = 0;
+			this.userMoved = false;
 			this.autoFit = true;
 			this.dirty = true;
 			this.kick();
@@ -317,6 +339,7 @@ class GraphView3D extends ItemView {
 		const colors = bar.createEl("button", { text: "Reload colors", cls: "qg3d-btn" });
 		colors.addEventListener("click", async () => {
 			await this.loadColorGroups();
+			this.recolor();
 			this.dirty = true;
 			this.kick();
 		});
@@ -345,7 +368,7 @@ class GraphView3D extends ItemView {
 				"resolved",
 				debounce(() => {
 					this.collect();
-					this.apply();
+					this.apply(false);
 				}, 2000, true)
 			)
 		);
@@ -369,6 +392,27 @@ class GraphView3D extends ItemView {
 		this.updateActive();
 		this.dirty = true;
 		this.kick();
+	}
+
+	/** Palette index per visible node from the graph.json color groups (first match wins). */
+	recolor() {
+		const n = this.nodes.length;
+		this.palette = [null];
+		this.colorIdx = new Uint16Array(n);
+		const seen = new Map();
+		this.nodes.forEach((x, i) => {
+			for (const g of this.groups) {
+				if (!g.test(x)) continue;
+				let k = seen.get(g.css);
+				if (k === undefined) {
+					k = this.palette.length;
+					seen.set(g.css, k);
+					this.palette.push(g.css);
+				}
+				this.colorIdx[i] = k;
+				break;
+			}
+		});
 	}
 
 	/** Index of the active note among visible nodes, plus every note linked to or from it. */
@@ -438,7 +482,8 @@ class GraphView3D extends ItemView {
 	}
 
 	/** Filter + local-depth selection, then rebuild the simulation. */
-	apply() {
+	/** force=false (metadata events): keep the layout when the visible notes, links and planes are unchanged. */
+	apply(force = true) {
 		if (!this.canvas) return;
 		const s = this.plugin.settings;
 		if (this.sim) this.nodes.forEach((n, i) => this.pos.set(n.path, [this.sim.px[i], this.sim.py[i], this.sim.pz[i]]));
@@ -472,7 +517,27 @@ class GraphView3D extends ItemView {
 			for (const [a, b] of edges) (linked.add(a), linked.add(b));
 			sel = sel.filter((n) => linked.has(n.path));
 		}
+		if (!force && this.sim && this.sameSelection(sel, edges)) {
+			this.nodes = sel;
+			this.recolor();
+			this.updateActive();
+			this.dirty = true;
+			this.kick();
+			return;
+		}
+		this.edgesSel = edges;
 		this.build(sel, edges);
+	}
+
+	sameSelection(sel, edges) {
+		const layers = this.plugin.settings.layers;
+		if (sel.length !== this.nodes.length || edges.length !== this.edgesSel.length) return false;
+		for (let i = 0; i < sel.length; i++) {
+			if (sel[i].path !== this.nodes[i].path) return false;
+			if (layers && planeKey(sel[i].fm) !== planeKey(this.nodes[i].fm)) return false;
+		}
+		for (let i = 0; i < edges.length; i++) if (edges[i][0] !== this.edgesSel[i][0] || edges[i][1] !== this.edgesSel[i][1]) return false;
+		return true;
 	}
 
 	build(sel, edgesP) {
@@ -521,17 +586,15 @@ class GraphView3D extends ItemView {
 		this.deg = deg;
 		this.edgeCount = pairs.length / 2;
 		this.updateActive();
-		this.colorOf = sel.map((x) => {
-			for (const g of this.groups) if (g.test(x)) return g.css;
-			return null;
-		});
+		this.recolor();
 		this.sx = new Float32Array(n);
 		this.sy = new Float32Array(n);
 		this.sz = new Float32Array(n);
 		this.sr = new Float32Array(n);
 		this.order = new Uint32Array(n);
 		this.hover = -1;
-		this.autoFit = true;
+		this.autoFit = !this.userMoved || Math.abs(n - this._prevN) > 0.3 * Math.max(n, this._prevN, 1);
+		this._prevN = n;
 		this.dirty = true;
 		this.kick();
 	}
@@ -541,7 +604,7 @@ class GraphView3D extends ItemView {
 	resize() {
 		if (!this.canvas) return;
 		const w = this.contentEl.win ?? window;
-		const dpr = w.devicePixelRatio || 1;
+		const dpr = Math.min(2, w.devicePixelRatio || 1);
 		const r = this.contentEl.getBoundingClientRect();
 		const bar = this.contentEl.querySelector(".qg3d-bar");
 		const h = Math.max(50, r.height - (bar ? bar.getBoundingClientRect().height : 0));
@@ -569,31 +632,48 @@ class GraphView3D extends ItemView {
 		this.zoom = this.fitZoom;
 	}
 
-	project(x, y, z, out) {
-		// The sim's z is the layer axis; show it as the vertical one (floors of a tower).
-		// Then: spin around that axis (clockwise from above), tilt the axis like a globe,
-		// then the user's camera yaw / pitch.
+	/** Rotation + perspective as one cached 3x3 matrix (rebuilt only when spin / yaw / pitch change). */
+	buildMatrix() {
 		const cs = Math.cos(this.spin);
 		const ss = Math.sin(this.spin);
-		const xs = x * cs + y * ss;
-		const zs = -x * ss + y * cs;
 		const ct = Math.cos(TILT);
 		const st = Math.sin(TILT);
-		const xt = xs * ct - z * st;
-		const yt = xs * st + z * ct;
 		const cy = Math.cos(this.yaw);
 		const sy = Math.sin(this.yaw);
 		const cp = Math.cos(this.pitch);
 		const sp = Math.sin(this.pitch);
-		const x1 = xt * cy + zs * sy;
-		const z1 = -xt * sy + zs * cy;
-		const y2 = yt * cp - z1 * sp;
-		const z2 = yt * sp + z1 * cp;
+		// The sim's z is the layer axis; show it as the vertical one (floors of a tower).
+		// Pipeline: spin around that axis (clockwise from above), tilt the axis like a globe,
+		// then the user's camera yaw / pitch. Linear, so push the basis vectors through it.
+		const f = (x, y, z) => {
+			const xs = x * cs + y * ss;
+			const zs = -x * ss + y * cs;
+			const xt = xs * ct - z * st;
+			const yt = xs * st + z * ct;
+			const x1 = xt * cy + zs * sy;
+			const z1 = -xt * sy + zs * cy;
+			return [x1, yt * cp - z1 * sp, yt * sp + z1 * cp];
+		};
+		const a = f(1, 0, 0);
+		const b = f(0, 1, 0);
+		const c = f(0, 0, 1);
+		this._m = [a[0], b[0], c[0], a[1], b[1], c[1], a[2], b[2], c[2]];
+		this._ms = this.spin;
+		this._my = this.yaw;
+		this._mp = this.pitch;
+	}
+
+	project(x, y, z, out) {
+		if (this._ms !== this.spin || this._my !== this.yaw || this._mp !== this.pitch) this.buildMatrix();
+		const m = this._m;
+		const X = m[0] * x + m[1] * y + m[2] * z;
+		const Y = m[3] * x + m[4] * y + m[5] * z;
+		const Z = m[6] * x + m[7] * y + m[8] * z;
 		const D = this.R * 4;
-		const sc = D / Math.max(D + z2, 1);
-		out[0] = this.W / 2 + this.panX + x1 * sc * this.zoom;
-		out[1] = this.H / 2 + this.panY + y2 * sc * this.zoom;
-		out[2] = z2;
+		const sc = D / Math.max(D + Z, 1);
+		out[0] = this.W / 2 + this.panX + X * sc * this.zoom;
+		out[1] = this.H / 2 + this.panY + Y * sc * this.zoom;
+		out[2] = Z;
 		out[3] = sc;
 		return out;
 	}
@@ -618,10 +698,18 @@ class GraphView3D extends ItemView {
 			if (this.autoFit) this.fit();
 		}
 		const now = performance.now();
-		const dt = this.lastT ? Math.min(0.05, (now - this.lastT) / 1000) : 0.016;
+		const dt = this.lastT ? Math.min(0.1, (now - this.lastT) / 1000) : 0.016;
 		this.lastT = now;
-		const spinning = !!(this.plugin.settings.spin && sim && sim.n > 0 && !this.inside && !this.dragging);
-		if (spinning) this.spin += dt * SPIN_SPEED;
+		const s = this.plugin.settings;
+		const spinning = !!(s.spin && sim && sim.n > 0 && !this.inside && !this.dragging);
+		if (spinning) this.spin += dt * (s.spinSpeed || DEFAULTS.spinSpeed);
+		if (this.wasSpinning && !spinning) this.dirty = true; // one full-quality redraw when it stops
+		this.wasSpinning = spinning;
+		// Adaptive quality while turning: thin out edges (a fixed subset, so no flicker) if drawing is slow.
+		if (!spinning) this.lite = 1;
+		else if (this.drawMs > 45) this.lite = 4;
+		else if (this.drawMs > 28) this.lite = 2;
+		else if (this.drawMs < 14) this.lite = 1;
 		const shown = this.contentEl.isShown ? this.contentEl.isShown() : true;
 		if (shown && (busy || spinning || this.dirty)) this.draw();
 		this.dirty = false;
@@ -629,17 +717,33 @@ class GraphView3D extends ItemView {
 		else this.lastT = 0;
 	}
 
+	/** Theme colors, re-read at most every 1.5 s (getComputedStyle every frame is slow). */
+	theme() {
+		const now = performance.now();
+		if (!this._theme || now - this._themeT > 1500) {
+			const cs = getComputedStyle(this.contentEl);
+			const g = (k, d) => cs.getPropertyValue(k).trim() || d;
+			this._theme = {
+				muted: g("--text-muted", "#888"),
+				accent: g("--interactive-accent", "#7c3aed"),
+				normal: g("--text-normal", "#ddd"),
+				bg: g("--background-primary", "#1e1e1e"),
+			};
+			this._themeT = now;
+		}
+		return this._theme;
+	}
+
 	draw() {
 		const ctx = this.ctx;
 		const sim = this.sim;
 		if (!ctx || !sim) return;
+		const t0 = performance.now();
+		if (this.lastDrawT && t0 - this.lastDrawT < 500) this.fps = this.fps * 0.9 + (1000 / Math.max(1, t0 - this.lastDrawT)) * 0.1;
+		this.lastDrawT = t0;
 		ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 		ctx.clearRect(0, 0, this.W, this.H);
-		const cs = getComputedStyle(this.contentEl);
-		const muted = cs.getPropertyValue("--text-muted").trim() || "#888";
-		const accent = cs.getPropertyValue("--interactive-accent").trim() || "#7c3aed";
-		const normal = cs.getPropertyValue("--text-normal").trim() || "#ddd";
-		const bg = cs.getPropertyValue("--background-primary").trim() || "#1e1e1e";
+		const { muted, accent, normal, bg } = this.theme();
 		const n = sim.n;
 		const R = this.R;
 		const out = [0, 0, 0, 1];
@@ -652,7 +756,7 @@ class GraphView3D extends ItemView {
 			this.sr[i] = (1.8 + Math.sqrt(this.deg[i]) * 0.9) * out[3] * nodeScale;
 		}
 
-		// plane frames
+		// plane frames (floors of the tower)
 		if (this.planes.length) {
 			ctx.save();
 			ctx.setLineDash([4, 4]);
@@ -680,13 +784,15 @@ class GraphView3D extends ItemView {
 
 		// edges
 		const E = sim.edges;
+		const act = this.activeIdx;
+		const nb = this.activeNb;
+		const step = this.lite;
 		ctx.lineWidth = 1;
 		ctx.strokeStyle = muted;
 		ctx.globalAlpha = this.edgeCount > 4000 ? 0.1 : 0.22;
 		ctx.beginPath();
-		const act = this.activeIdx;
-		const nb = this.activeNb;
 		for (let e = 0; e < E.length; e += 2) {
+			if (step > 1 && (e >> 1) % step !== 0) continue;
 			const i = E[e];
 			const j = E[e + 1];
 			if (i === this.hover || j === this.hover || i === act || j === act) continue;
@@ -724,26 +830,51 @@ class GraphView3D extends ItemView {
 			ctx.stroke();
 		}
 
-		// nodes, far to near
-		const ord = this.order;
-		for (let i = 0; i < n; i++) ord[i] = i;
-		ord.sort((a, b) => this.sz[b] - this.sz[a]);
-		const fallback = muted;
-		for (let k = 0; k < n; k++) {
-			const i = ord[k];
+		// nodes: batched by (color, depth fog level, dimmed) so each batch is one path and one fill
+		const pal = this.palette;
+		const size = pal.length * 8;
+		if (!this._bk || this._bk.length !== size) this._bk = Array.from({ length: size }, () => []);
+		else for (const b of this._bk) b.length = 0;
+		const lit = [];
+		for (let i = 0; i < n; i++) {
+			if (i === act || nb.has(i)) {
+				lit.push(i);
+				continue;
+			}
 			const fog = Math.min(1, Math.max(0, (this.sz[i] + R) / (2 * R)));
-			const lit = i === act || nb.has(i);
-			ctx.globalAlpha = (1 - 0.6 * fog) * (act >= 0 && !lit ? 0.55 : 1);
-			ctx.fillStyle = this.colorOf[i] || fallback;
+			const fl = Math.min(3, Math.floor(fog * 4));
+			this._bk[(this.colorIdx[i] * 4 + fl) * 2 + (act >= 0 ? 1 : 0)].push(i);
+		}
+		for (let fl = 3; fl >= 0; fl--) {
+			for (let ci = 0; ci < pal.length; ci++) {
+				for (let dim = 0; dim < 2; dim++) {
+					const b = this._bk[(ci * 4 + fl) * 2 + dim];
+					if (!b.length) continue;
+					ctx.globalAlpha = (1 - (0.6 * (fl + 0.5)) / 4) * (dim ? 0.55 : 1);
+					ctx.fillStyle = ci === 0 ? muted : pal[ci];
+					ctx.beginPath();
+					for (let k = 0; k < b.length; k++) {
+						const i = b[k];
+						const r = Math.max(1, this.sr[i]);
+						ctx.moveTo(this.sx[i] + r, this.sy[i]);
+						ctx.arc(this.sx[i], this.sy[i], r, 0, 6.2832);
+					}
+					ctx.fill();
+				}
+			}
+		}
+		// active note and its neighbors on top, with purple rings
+		for (const i of lit) {
+			const fog = Math.min(1, Math.max(0, (this.sz[i] + R) / (2 * R)));
+			ctx.globalAlpha = 1 - 0.4 * fog;
+			ctx.fillStyle = this.colorIdx[i] ? pal[this.colorIdx[i]] : muted;
 			ctx.beginPath();
 			ctx.arc(this.sx[i], this.sy[i], Math.max(1, this.sr[i]) * (i === act ? 1.6 : 1), 0, 6.2832);
 			ctx.fill();
-			if (lit) {
-				ctx.globalAlpha = 1;
-				ctx.strokeStyle = PURPLE;
-				ctx.lineWidth = i === act ? 2.5 : 1.5;
-				ctx.stroke();
-			}
+			ctx.globalAlpha = 1;
+			ctx.strokeStyle = PURPLE;
+			ctx.lineWidth = i === act ? 2.5 : 1.5;
+			ctx.stroke();
 		}
 		ctx.globalAlpha = 1;
 		ctx.lineWidth = 1;
@@ -806,8 +937,14 @@ class GraphView3D extends ItemView {
 			ctx.fillStyle = kind === "hover" ? accent : kind === "active" || kind === "nb" ? PURPLE : normal;
 			ctx.fillText(text, x, y);
 		}
-		const actTxt = act >= 0 ? ` · ${this.nodes[act].name}: ${nb.size} links` : "";
-		this.status.setText(`${n} notes · ${this.edgeCount} links${actTxt}${sim.settled ? "" : " · laying out…"}`);
+
+		this.drawMs = this.drawMs * 0.8 + (performance.now() - t0) * 0.2;
+		if (t0 - this._statusT > 400) {
+			this._statusT = t0;
+			const actTxt = act >= 0 ? ` · ${this.nodes[act].name}: ${nb.size} links` : "";
+			const perf = this.wasSpinning ? ` · ${Math.round(this.fps)} fps · ${this.drawMs.toFixed(0)} ms${this.lite > 1 ? " (lite edges)" : ""}` : "";
+			this.status.setText(`${n} notes · ${this.edgeCount} links${actTxt}${sim.settled ? "" : " · laying out…"}${perf}`);
+		}
 	}
 
 	/* ---- input ---- */
@@ -844,6 +981,7 @@ class GraphView3D extends ItemView {
 					this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch + dy * 0.006));
 				}
 				this.autoFit = false;
+				this.userMoved = true;
 				this.dirty = true;
 				this.kick();
 				return;
@@ -876,6 +1014,7 @@ class GraphView3D extends ItemView {
 				this.zoom *= Math.exp(-e.deltaY * 0.0012);
 				this.zoom = Math.max(this.fitZoom * 0.2, Math.min(this.fitZoom * 40, this.zoom));
 				this.autoFit = false;
+				this.userMoved = true;
 				this.dirty = true;
 				this.kick();
 			},
