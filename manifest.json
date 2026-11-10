@@ -1,0 +1,9 @@
+{
+	"id": "3d-graph",
+	"name": "3D-Graph",
+	"version": "0.1.0",
+	"minAppVersion": "1.4.0",
+	"description": "Personal 3D graph: core-graph search and color groups, drag to rotate, ontology layers stacked as planes.",
+	"author": "Minh",
+	"isDesktopOnly": true
+}

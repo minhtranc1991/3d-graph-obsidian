@@ -1,0 +1,58 @@
+.qg3d-root {
+	display: flex;
+	flex-direction: column;
+	padding: 0 !important;
+	overflow: hidden;
+}
+
+.qg3d-bar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 10px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+
+.qg3d-search {
+	flex: 1 1 280px;
+	min-width: 180px;
+	font-size: var(--font-ui-small);
+}
+
+.qg3d-select,
+.qg3d-btn {
+	font-size: var(--font-ui-small);
+}
+
+.qg3d-toggle {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.qg3d-range {
+	width: 90px;
+}
+
+.qg3d-status {
+	margin-left: auto;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	white-space: nowrap;
+}
+
+.qg3d-canvas {
+	display: block;
+	flex: 1 1 auto;
+	cursor: grab;
+	touch-action: none;
+}
+
+.qg3d-canvas:active {
+	cursor: grabbing;
+}
