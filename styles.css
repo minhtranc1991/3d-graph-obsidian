@@ -1,54 +1,13 @@
 .qg3d-root {
-	display: flex;
-	flex-direction: column;
+	position: relative;
 	padding: 0 !important;
 	overflow: hidden;
 }
 
-.qg3d-bar {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 8px;
-	padding: 6px 10px;
-	border-bottom: 1px solid var(--background-modifier-border);
-	background: var(--background-secondary);
-}
-
-.qg3d-search {
-	flex: 1 1 280px;
-	min-width: 180px;
-	font-size: var(--font-ui-small);
-}
-
-.qg3d-select,
-.qg3d-btn {
-	font-size: var(--font-ui-small);
-}
-
-.qg3d-toggle {
-	display: flex;
-	align-items: center;
-	gap: 4px;
-	font-size: var(--font-ui-small);
-	color: var(--text-muted);
-	cursor: pointer;
-}
-
-.qg3d-range {
-	width: 90px;
-}
-
-.qg3d-status {
-	margin-left: auto;
-	font-size: var(--font-ui-smaller);
-	color: var(--text-faint);
-	white-space: nowrap;
-}
-
 .qg3d-canvas {
 	display: block;
-	flex: 1 1 auto;
+	width: 100%;
+	height: 100%;
 	cursor: grab;
 	touch-action: none;
 }
@@ -57,18 +16,80 @@
 	cursor: grabbing;
 }
 
-.qg3d-root {
-	position: relative;
+.qg3d-status {
+	position: absolute;
+	left: 10px;
+	bottom: 8px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	pointer-events: none;
+	white-space: nowrap;
 }
 
+/* one gear icon, top right; it reveals the button stack */
+.qg3d-controls {
+	position: absolute;
+	top: 10px;
+	right: 10px;
+	z-index: 6;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 6px;
+}
+
+.qg3d-stack {
+	display: none;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.qg3d-stack.is-open {
+	display: flex;
+}
+
+.qg3d-ibtn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	border-radius: var(--radius-m);
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	box-shadow: var(--shadow-s);
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.qg3d-ibtn:hover {
+	color: var(--text-normal);
+}
+
+.qg3d-ibtn.is-active {
+	color: var(--interactive-accent);
+	border-color: var(--interactive-accent);
+}
+
+.qg3d-ibtn.is-disabled {
+	opacity: 0.4;
+}
+
+.qg3d-ibtn .svg-icon {
+	width: 18px;
+	height: 18px;
+}
+
+/* settings menu: top right, next to the buttons; every group starts collapsed */
 .qg3d-panel {
 	display: none;
 	position: absolute;
-	left: 8px;
-	top: 46px;
+	right: 54px;
+	top: 10px;
 	z-index: 5;
 	width: 270px;
-	max-height: calc(100% - 56px);
+	max-height: calc(100% - 24px);
 	overflow-y: auto;
 	padding: 4px 10px 10px;
 	background: var(--background-secondary);
@@ -86,6 +107,19 @@
 	cursor: pointer;
 	font-weight: var(--font-semibold);
 	padding: 6px 0;
+}
+
+.qg3d-search {
+	width: 100%;
+	font-size: var(--font-ui-small);
+}
+
+.qg3d-select {
+	font-size: var(--font-ui-small);
+}
+
+.qg3d-btn {
+	font-size: var(--font-ui-small);
 }
 
 .qg3d-sec {

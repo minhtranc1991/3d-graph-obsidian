@@ -9,7 +9,7 @@
  * All pointer input uses setPointerCapture on the canvas itself, so it works in
  * popout windows and on any monitor (no global window listeners).
  */
-const { Plugin, ItemView, getAllTags, Notice, debounce } = require("obsidian");
+const { Plugin, ItemView, getAllTags, Notice, debounce, setIcon } = require("obsidian");
 
 const VIEW_TYPE = "3d-graph";
 const DEFAULTS = {
@@ -20,7 +20,9 @@ const DEFAULTS = {
 	orphans: true,
 	spin: true,
 	tags: true,
-	panelOpen: true,
+	menuOpen: false, // the gear's button stack
+	settingsOpen: false, // the settings menu
+	view3d: true, // false = flat 2D like the core Graph view
 	// display
 	nodeSize: 1,
 	nodeOpacity: 1,
@@ -116,6 +118,7 @@ class Sim {
 		this.L = L;
 		this.zt = zt; // Float64Array | null
 		this.p = { center: 0.02, repel: 1, link: 1 }; // live force parameters
+		this.flat = false; // 2D mode: keep z = 0
 		this.px = new Float64Array(n);
 		this.py = new Float64Array(n);
 		this.pz = new Float64Array(n);
@@ -211,6 +214,10 @@ class Sim {
 			px[i] += vx[i];
 			py[i] += vy[i];
 			pz[i] += vz[i];
+			if (this.flat) {
+				pz[i] = 0;
+				vz[i] = 0;
+			}
 		}
 		this.alpha = Math.max(0, a * 0.985);
 	}
@@ -269,6 +276,7 @@ class GraphView3D extends ItemView {
 		this._prevN = 0;
 		this.tiltDeg = 23.5;
 		this.wScale = 1;
+		this.is3d = true;
 		this.panel = null;
 	}
 
@@ -287,37 +295,59 @@ class GraphView3D extends ItemView {
 		const root = this.contentEl;
 		root.empty();
 		root.addClass("qg3d-root");
-		const bar = root.createDiv({ cls: "qg3d-bar" });
-		const search = bar.createEl("input", { type: "text", cls: "qg3d-search" });
-		search.placeholder = 'path:"02 - Concepts"  tag:#status/needs-review  ["layer":concept]';
-		search.value = s.filter;
-		this.searchEl = search;
-		search.addEventListener(
-			"input",
-			debounce(() => {
-				s.filter = search.value;
-				this.plugin.saveSettings();
-				this.apply();
-			}, 300)
-		);
-		const gear = bar.createEl("button", { text: "Settings", cls: "qg3d-btn" });
-		gear.addEventListener("click", () => {
-			s.panelOpen = !s.panelOpen;
-			this.panel.classList.toggle("is-open", s.panelOpen);
-			this.plugin.saveSettings();
-		});
-		bar.createEl("button", { text: "Reset view", cls: "qg3d-btn" }).addEventListener("click", () => this.resetView());
-		this.panel = root.createDiv({ cls: "qg3d-panel" });
-		this.panel.classList.toggle("is-open", !!s.panelOpen);
-		// the globe stops turning while you adjust settings
-		this.panel.addEventListener("pointerenter", () => (this.inside = true));
-		this.panel.addEventListener("pointerleave", () => {
-			this.inside = false;
-			this.kick();
-		});
-		this.buildPanel();
-		this.status = bar.createSpan({ cls: "qg3d-status" });
 		this.canvas = root.createEl("canvas", { cls: "qg3d-canvas" });
+		this.status = root.createDiv({ cls: "qg3d-status" });
+
+		// One gear icon, top right (like the core Graph view); it reveals the buttons.
+		const ctl = root.createDiv({ cls: "qg3d-controls" });
+		const mk = (parent, icon, tip) => {
+			const b = parent.createEl("button", { cls: "qg3d-ibtn", attr: { "aria-label": tip } });
+			setIcon(b, icon);
+			return b;
+		};
+		this.btnMenu = mk(ctl, "settings", "Graph controls");
+		this.stack = ctl.createDiv({ cls: "qg3d-stack" });
+		this.btnSettings = mk(this.stack, "sliders-horizontal", "Settings");
+		this.btnLayers = mk(this.stack, "layers", "Layers view");
+		this.btn3d = mk(this.stack, "box", "3D view");
+		this.btnReset = mk(this.stack, "rotate-ccw", "Reset");
+		const save = () => this.plugin.saveSettings();
+		this.btnMenu.addEventListener("click", () => {
+			s.menuOpen = !s.menuOpen;
+			save();
+			this.syncButtons();
+		});
+		this.btnSettings.addEventListener("click", () => {
+			s.settingsOpen = !s.settingsOpen;
+			save();
+			this.syncButtons();
+		});
+		this.btnLayers.addEventListener("click", () => {
+			s.layers = !s.layers;
+			save();
+			this.syncButtons();
+			this.apply();
+		});
+		this.btn3d.addEventListener("click", () => {
+			s.view3d = !s.view3d;
+			save();
+			this.syncButtons();
+			this.autoFit = !this.userMoved;
+			this.apply();
+		});
+		this.btnReset.addEventListener("click", () => this.resetView());
+
+		this.panel = root.createDiv({ cls: "qg3d-panel" });
+		// the globe stops turning while the pointer is over the controls or the settings menu
+		for (const el of [ctl, this.panel]) {
+			el.addEventListener("pointerenter", () => (this.inside = true));
+			el.addEventListener("pointerleave", () => {
+				this.inside = false;
+				this.kick();
+			});
+		}
+		this.buildPanel();
+		this.syncButtons();
 		this.ctx = this.canvas.getContext("2d");
 		this.bindPointer();
 
@@ -409,6 +439,18 @@ class GraphView3D extends ItemView {
 		}
 	}
 
+	/** Show/hide the button stack and the settings menu; mark the toggles that are on. */
+	syncButtons() {
+		const s = this.plugin.settings;
+		this.stack.classList.toggle("is-open", !!s.menuOpen);
+		this.panel.classList.toggle("is-open", !!(s.menuOpen && s.settingsOpen));
+		this.btnMenu.classList.toggle("is-active", !!s.menuOpen);
+		this.btnSettings.classList.toggle("is-active", !!s.settingsOpen);
+		this.btnLayers.classList.toggle("is-active", !!s.layers && !!s.view3d);
+		this.btnLayers.classList.toggle("is-disabled", !s.view3d);
+		this.btn3d.classList.toggle("is-active", !!s.view3d);
+	}
+
 	resetView() {
 		this.yaw = 0.6;
 		this.pitch = -0.35;
@@ -436,23 +478,26 @@ class GraphView3D extends ItemView {
 	/** Copy camera-related settings (tilt, layer width) into fields the projection reads. */
 	syncCam() {
 		const s = this.plugin.settings;
+		this.is3d = s.view3d;
 		this.tiltDeg = s.tilt;
-		this.wScale = s.layers ? s.layerWidth : 1;
+		this.wScale = s.layers && s.view3d ? s.layerWidth : 1;
 	}
 
 	/** Settings panel, laid out like the core Graph view: Filters / Groups / Display / Spin / Forces / Layers. */
 	buildPanel() {
 		const s = this.plugin.settings;
 		const p = this.panel;
+		const wasOpen = new Set([...p.querySelectorAll("details")].filter((d) => d.open).map((d) => d.querySelector("summary").textContent));
 		p.empty();
 		const save = () => this.plugin.saveSettings();
 		const redraw = () => {
 			this.dirty = true;
 			this.kick();
 		};
-		const section = (title, open = true) => {
+		// every group starts collapsed; groups you opened stay open when the menu is rebuilt
+		const section = (title) => {
 			const d = p.createEl("details");
-			if (open) d.open = true;
+			if (wasOpen.has(title)) d.open = true;
 			d.createEl("summary", { text: title });
 			return d.createDiv({ cls: "qg3d-sec" });
 		};
@@ -490,6 +535,18 @@ class GraphView3D extends ItemView {
 		};
 
 		const filters = section("Filters");
+		const search = filters.createEl("input", { type: "text", cls: "qg3d-search" });
+		search.placeholder = 'Search: path:"02 - Concepts"  tag:#x  ["layer":concept]';
+		search.value = s.filter;
+		this.searchEl = search;
+		search.addEventListener(
+			"input",
+			debounce(() => {
+				s.filter = search.value;
+				save();
+				this.apply();
+			}, 300)
+		);
 		const depth = filters.createEl("select", { cls: "qg3d-select", attr: { "aria-label": "Local depth around the active note" } });
 		[["0", "Whole vault"], ["1", "Local: 1 hop"], ["2", "Local: 2 hops"], ["3", "Local: 3 hops"]].forEach(([v, tx]) => depth.createEl("option", { value: v, text: tx }));
 		depth.value = String(s.depth);
@@ -544,7 +601,7 @@ class GraphView3D extends ItemView {
 		}, true);
 
 		const layers = section("Layers");
-		toggle(layers, "Layers (tower)", "layers", () => this.apply());
+		layers.createDiv({ cls: "qg3d-note", text: "Turn the tower on or off with the Layers view button." });
 		slider(layers, "Width inside a layer", "layerWidth", 0.5, 2.5, 0.05, () => {
 			this.syncCam();
 			if (!this.userMoved) this.fit();
@@ -558,10 +615,11 @@ class GraphView3D extends ItemView {
 			this.apply();
 		});
 		actions.createEl("button", { text: "Reset settings", cls: "qg3d-btn" }).addEventListener("click", () => {
-			const keep = { filter: s.filter, panelOpen: s.panelOpen, depth: s.depth };
+			const keep = { filter: s.filter, depth: s.depth, menuOpen: s.menuOpen, settingsOpen: s.settingsOpen };
 			Object.assign(s, DEFAULTS, keep);
 			save();
 			this.buildPanel();
+			this.syncButtons();
 			this.pos.clear();
 			this.apply();
 		});
@@ -716,7 +774,7 @@ class GraphView3D extends ItemView {
 		const L = 40 * s.spread;
 		let zt = null;
 		this.planes = [];
-		if (s.layers) {
+		if (s.layers && s.view3d) {
 			const present = new Set(sel.map((x) => planeKey(x.fm)));
 			const keys = PLANE_ORDER.filter((k) => present.has(k));
 			const gap = L * 3.5 * s.layerGap;
@@ -728,16 +786,18 @@ class GraphView3D extends ItemView {
 		const sim = new Sim(n, Int32Array.from(pairs), degForce, L, zt);
 		sim.p = this.forceParams();
 		const rad = L * Math.cbrt(Math.max(n, 1)) * 0.6;
+		const flat = !s.view3d;
+		sim.flat = flat;
 		for (let i = 0; i < n; i++) {
 			const p = this.pos.get(sel[i].path);
 			if (p) {
 				sim.px[i] = p[0];
 				sim.py[i] = p[1];
-				sim.pz[i] = p[2];
+				sim.pz[i] = flat ? 0 : p[2] || (Math.random() - 0.5) * L;
 			} else {
 				sim.px[i] = (Math.random() - 0.5) * 2 * rad;
 				sim.py[i] = (Math.random() - 0.5) * 2 * rad;
-				sim.pz[i] = zt ? zt[i] + (Math.random() - 0.5) * L : (Math.random() - 0.5) * 2 * rad;
+				sim.pz[i] = flat ? 0 : zt ? zt[i] + (Math.random() - 0.5) * L : (Math.random() - 0.5) * 2 * rad;
 			}
 		}
 		this.sim = sim;
@@ -795,6 +855,17 @@ class GraphView3D extends ItemView {
 
 	/** Rotation + perspective as one cached 3x3 matrix (rebuilt only when spin / yaw / pitch change). */
 	buildMatrix() {
+		if (!this.is3d) {
+			// flat 2D: sim x / y are screen x / y, no rotation
+			this._m = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+			this._ms = this.spin;
+			this._my = this.yaw;
+			this._mp = this.pitch;
+			this._mt = this.tiltDeg;
+			this._mw = this.wScale;
+			this._m3 = false;
+			return;
+		}
 		const cs = Math.cos(this.spin);
 		const ss = Math.sin(this.spin);
 		const tilt = (this.tiltDeg * Math.PI) / 180;
@@ -828,10 +899,11 @@ class GraphView3D extends ItemView {
 		this._mp = this.pitch;
 		this._mt = this.tiltDeg;
 		this._mw = this.wScale;
+		this._m3 = true;
 	}
 
 	project(x, y, z, out) {
-		if (this._ms !== this.spin || this._my !== this.yaw || this._mp !== this.pitch || this._mt !== this.tiltDeg || this._mw !== this.wScale) this.buildMatrix();
+		if (this._ms !== this.spin || this._my !== this.yaw || this._mp !== this.pitch || this._mt !== this.tiltDeg || this._mw !== this.wScale || this._m3 !== this.is3d) this.buildMatrix();
 		const m = this._m;
 		const X = m[0] * x + m[1] * y + m[2] * z;
 		const Y = m[3] * x + m[4] * y + m[5] * z;
@@ -868,7 +940,7 @@ class GraphView3D extends ItemView {
 		const dt = this.lastT ? Math.min(0.1, (now - this.lastT) / 1000) : 0.016;
 		this.lastT = now;
 		const s = this.plugin.settings;
-		const spinning = !!(s.spin && sim && sim.n > 0 && !this.inside && !this.dragging);
+		const spinning = !!(s.spin && s.view3d && sim && sim.n > 0 && !this.inside && !this.dragging);
 		if (spinning) this.spin += dt * (s.spinSpeed || DEFAULTS.spinSpeed) * (s.clockwise ? 1 : -1);
 		if (this.wasSpinning && !spinning) this.dirty = true; // one full-quality redraw when it stops
 		this.wasSpinning = spinning;
@@ -1152,7 +1224,7 @@ class GraphView3D extends ItemView {
 		c.addEventListener("pointerdown", (e) => {
 			c.setPointerCapture(e.pointerId);
 			this.dragging = true;
-			drag = { x: e.clientX, y: e.clientY, moved: false, pan: e.shiftKey || e.button === 2 || e.button === 1, button: e.button };
+			drag = { x: e.clientX, y: e.clientY, moved: false, pan: e.shiftKey || e.button === 2 || e.button === 1 || !this.plugin.settings.view3d, button: e.button };
 		});
 		c.addEventListener("pointermove", (e) => {
 			if (drag) {
