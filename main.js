@@ -22,7 +22,7 @@ const DEFAULTS = {
 	tags: true,
 	spinSpeed: 0.35, // rad/s, clockwise seen from above (~18 s per turn)
 };
-const TAG_COLOR = "#f59e0b"; // tag nodes (unless a graph.json color group matches them)
+const TAG_KEY = "@tag"; // palette marker: tag nodes use the theme green unless a graph.json group matches them
 const PURPLE = "#a855f7"; // active note, its neighbors and the links between them
 const TILT = 0.41; // globe-like axis tilt (~23.5 degrees)
 // Plane order, top to bottom. Unknown keys fall into "other".
@@ -420,11 +420,11 @@ class GraphView3D extends ItemView {
 				break;
 			}
 			if (x.isTag && !this.colorIdx[i]) {
-				let k = seen.get(TAG_COLOR);
+				let k = seen.get(TAG_KEY);
 				if (k === undefined) {
 					k = this.palette.length;
-					seen.set(TAG_COLOR, k);
-					this.palette.push(TAG_COLOR);
+					seen.set(TAG_KEY, k);
+					this.palette.push(TAG_KEY);
 				}
 				this.colorIdx[i] = k;
 			}
@@ -459,7 +459,8 @@ class GraphView3D extends ItemView {
 			const cg = JSON.parse(raw).colorGroups || [];
 			this.groups = cg.map((g) => {
 				const rgb = g.color && typeof g.color.rgb === "number" ? g.color.rgb : 0x888888;
-				return { test: compileQuery(g.query), css: `rgb(${(rgb >> 16) & 255},${(rgb >> 8) & 255},${rgb & 255})` };
+				const al = g.color && typeof g.color.a === "number" ? g.color.a : 1;
+				return { test: compileQuery(g.query), css: `rgba(${(rgb >> 16) & 255},${(rgb >> 8) & 255},${rgb & 255},${al})` };
 			});
 		} catch (e) {
 			this.groups = [];
@@ -754,14 +755,32 @@ class GraphView3D extends ItemView {
 	theme() {
 		const now = performance.now();
 		if (!this._theme || now - this._themeT > 1500) {
-			const cs = getComputedStyle(this.contentEl);
-			const g = (k, d) => cs.getPropertyValue(k).trim() || d;
-			this._theme = {
-				muted: g("--text-muted", "#888"),
-				accent: g("--interactive-accent", "#7c3aed"),
-				normal: g("--text-normal", "#ddd"),
-				bg: g("--background-primary", "#1e1e1e"),
+			const el = this.contentEl;
+			const cs = getComputedStyle(el);
+			// Resolve any CSS color (hsl(var(...)), named, ...) to a concrete rgb() the canvas always accepts.
+			const probe = el.createDiv();
+			const col = (names, d) => {
+				for (const nme of names) {
+					const v = cs.getPropertyValue(nme).trim();
+					if (!v) continue;
+					probe.style.color = v;
+					const c = getComputedStyle(probe).color;
+					if (c) return c;
+				}
+				return d;
 			};
+			// Same variables the core Graph view uses, so the look follows the theme.
+			this._theme = {
+				muted: col(["--text-muted"], "#888"),
+				accent: col(["--interactive-accent"], "#7c3aed"),
+				normal: col(["--text-normal"], "#ddd"),
+				bg: col(["--background-primary"], "#1e1e1e"),
+				node: col(["--graph-node", "--text-muted"], "#888"),
+				line: col(["--graph-line", "--background-modifier-border"], "#888"),
+				text: col(["--graph-text", "--text-normal"], "#ddd"),
+				tag: col(["--color-green"], "#44cf6e"),
+			};
+			probe.remove();
 			this._themeT = now;
 		}
 		return this._theme;
@@ -776,7 +795,8 @@ class GraphView3D extends ItemView {
 		this.lastDrawT = t0;
 		ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 		ctx.clearRect(0, 0, this.W, this.H);
-		const { muted, accent, normal, bg } = this.theme();
+		const th = this.theme();
+		const { muted, accent, bg } = th;
 		const n = sim.n;
 		const R = this.R;
 		const out = [0, 0, 0, 1];
@@ -821,7 +841,7 @@ class GraphView3D extends ItemView {
 		const nb = this.activeNb;
 		const step = this.lite;
 		ctx.lineWidth = 1;
-		ctx.strokeStyle = muted;
+		ctx.strokeStyle = th.line;
 		ctx.globalAlpha = this.edgeCount > 4000 ? 0.1 : 0.22;
 		ctx.beginPath();
 		for (let e = 0; e < E.length; e += 2) {
@@ -883,8 +903,8 @@ class GraphView3D extends ItemView {
 				for (let dim = 0; dim < 2; dim++) {
 					const b = this._bk[(ci * 4 + fl) * 2 + dim];
 					if (!b.length) continue;
-					ctx.globalAlpha = (1 - (0.6 * (fl + 0.5)) / 4) * (dim ? 0.55 : 1);
-					ctx.fillStyle = ci === 0 ? muted : pal[ci];
+					ctx.globalAlpha = (1 - (0.35 * (fl + 0.5)) / 4) * (dim ? 0.55 : 1);
+					ctx.fillStyle = ci === 0 ? th.node : pal[ci] === TAG_KEY ? th.tag : pal[ci];
 					ctx.beginPath();
 					for (let k = 0; k < b.length; k++) {
 						const i = b[k];
@@ -899,8 +919,8 @@ class GraphView3D extends ItemView {
 		// active note and its neighbors on top, with purple rings
 		for (const i of lit) {
 			const fog = Math.min(1, Math.max(0, (this.sz[i] + R) / (2 * R)));
-			ctx.globalAlpha = 1 - 0.4 * fog;
-			ctx.fillStyle = this.colorIdx[i] ? pal[this.colorIdx[i]] : muted;
+			ctx.globalAlpha = 1 - 0.2 * fog;
+			ctx.fillStyle = !this.colorIdx[i] ? th.node : pal[this.colorIdx[i]] === TAG_KEY ? th.tag : pal[this.colorIdx[i]];
 			ctx.beginPath();
 			ctx.arc(this.sx[i], this.sy[i], Math.max(1, this.sr[i]) * (i === act ? 1.6 : 1), 0, 6.2832);
 			ctx.fill();
@@ -967,7 +987,7 @@ class GraphView3D extends ItemView {
 			ctx.fillStyle = bg;
 			ctx.fillRect(box[0], box[1], w + 4, 16);
 			ctx.globalAlpha = 1;
-			ctx.fillStyle = kind === "hover" ? accent : kind === "active" || kind === "nb" ? PURPLE : normal;
+			ctx.fillStyle = kind === "hover" ? accent : kind === "active" || kind === "nb" ? PURPLE : th.text;
 			ctx.fillText(text, x, y);
 		}
 
